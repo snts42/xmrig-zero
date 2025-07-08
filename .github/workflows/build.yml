@@ -1,0 +1,85 @@
+name: build xmrig-zero (windows)
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.get_tag.outputs.tag }}
+      already_built: ${{ steps.check_release.outputs.already_built }}
+    steps:
+      - name: get latest xmrig release tag
+        id: get_tag
+        run: |
+          tag=$(curl -s https://api.github.com/repos/xmrig/xmrig/releases/latest | jq -r .tag_name)
+          echo "tag=$tag" >> $GITHUB_OUTPUT
+
+      - name: check if release already exists
+        id: check_release
+        run: |
+          tag="${{ steps.get_tag.outputs.tag }}"
+          status=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/$tag")
+          if [ "$status" = "200" ]; then
+            echo "already_built=true" >> $GITHUB_OUTPUT
+          else
+            echo "already_built=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build_win:
+    needs: check
+    if: needs.check.outputs.already_built == 'false'
+    runs-on: windows-latest
+    steps:
+      - name: checkout xmrig at tag
+        uses: actions/checkout@v4
+        with:
+          repository: xmrig/xmrig
+          ref: ${{ needs.check.outputs.tag }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: checkout deps
+        run: git clone https://github.com/xmrig/xmrig-deps.git
+
+      - name: patch 0% donation
+        run: |
+          powershell -Command "(Get-Content src/donate.h) -replace 'kDefaultDonateLevel = [0-9]+','kDefaultDonateLevel = 0' | Set-Content src/donate.h"
+          powershell -Command "(Get-Content src/donate.h) -replace 'kMinimumDonateLevel = [0-9]+','kMinimumDonateLevel = 0' | Set-Content src/donate.h"
+
+      - name: build project on windows
+        run: |
+          cmake -Bbuild -S. -G "Visual Studio 17 2022" -A x64 -DXMRIG_DEPS=${{ github.workspace }}/xmrig-deps/msvc2022/x64
+          cmake --build build --config Release
+
+      - name: package artifact
+        run: |
+          copy src\config.json build\Release\
+          copy bin\WinRing0\WinRing0x64.sys build\Release\
+          cd build/Release
+          7z a -tzip -mx windows_build.zip xmrig.exe config.json WinRing0x64.sys
+
+      - name: upload windows build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows_build
+          path: build/Release/windows_build.zip
+
+      - name: create github release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.check.outputs.tag }}
+          name: ${{ needs.check.outputs.tag }}
+          body: "Automated Windows build of XMRig (${{ needs.check.outputs.tag }}) with 0% donation."
+          files: build/Release/windows_build.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
