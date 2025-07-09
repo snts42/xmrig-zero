@@ -19,7 +19,7 @@ In the official XMRig binaries, even if you try to set the developer donation to
 
 ## Download
 
-See [Releases](https://github.com/your-username/xmrig-zero/releases) for pre-built binaries.
+See [Releases](https://github.com/snts42/xmrig-zero/releases) for pre-built binaries.
 
 ---
 
