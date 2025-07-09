@@ -97,7 +97,10 @@ jobs:
           sed -i 's/constexpr const int kMinimumDonateLevel = [0-9]\+;/constexpr const int kMinimumDonateLevel = 0;/' src/donate.h
       - name: build static
         run: |
-          cd scripts && ./build_deps.sh && cd ../build
+          cd scripts
+          ./build_deps.sh
+          cd ..
+          mkdir build && cd build
           cmake .. -DXMRIG_DEPS=scripts/deps -DBUILD_STATIC=ON
           make -j$(nproc)
       - name: package artifact
