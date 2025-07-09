@@ -2,7 +2,7 @@ name: build xmrig-zero (multi-platform)
 
 on:
   schedule:
-    - cron: '0 2 * * *'
+    - cron: '0 2 * * *'   # daily at 2:00 AM UTC
   workflow_dispatch:
 
 permissions:
@@ -48,22 +48,27 @@ jobs:
           repository: xmrig/xmrig
           ref: ${{ needs.check.outputs.tag }}
           token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: checkout deps
         run: git clone https://github.com/xmrig/xmrig-deps.git
+
       - name: patch 0% donation
         run: |
           powershell -Command "(Get-Content src/donate.h) -replace 'kDefaultDonateLevel = [0-9]+','kDefaultDonateLevel = 0' | Set-Content src/donate.h"
           powershell -Command "(Get-Content src/donate.h) -replace 'kMinimumDonateLevel = [0-9]+','kMinimumDonateLevel = 0' | Set-Content src/donate.h"
+
       - name: build project on windows
         run: |
           cmake -Bbuild -S. -G "Visual Studio 17 2022" -A x64 -DXMRIG_DEPS=${{ github.workspace }}/xmrig-deps/msvc2022/x64
           cmake --build build --config Release
+
       - name: package artifact
         run: |
           copy src\config.json build\Release\
           copy bin\WinRing0\WinRing0x64.sys build\Release\
           cd build/Release
           7z a -tzip -mx xmrig-${{ needs.check.outputs.tag }}-windows-x64.zip xmrig.exe config.json WinRing0x64.sys
+
       - name: upload artifact to release
         uses: softprops/action-gh-release@v2
         with:
@@ -82,7 +87,7 @@ jobs:
     steps:
       - name: install deps
         run: |
-          apk add --no-cache build-base cmake hwloc-dev hwloc-libs-static openssl-dev openssl-libs-static libuv-dev libuv-static git pkgconf
+          apk add --no-cache git make cmake libstdc++ gcc g++ automake libtool autoconf linux-headers
       - name: checkout xmrig at tag
         run: |
           git clone --branch ${{ needs.check.outputs.tag }} --depth 1 https://github.com/xmrig/xmrig.git .
@@ -92,8 +97,8 @@ jobs:
           sed -i 's/constexpr const int kMinimumDonateLevel = [0-9]\+;/constexpr const int kMinimumDonateLevel = 0;/' src/donate.h
       - name: build static
         run: |
-          mkdir build && cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_STATIC=ON -DWITH_OPENCL=OFF -DWITH_CUDA=OFF -DOPENSSL_USE_STATIC_LIBS=TRUE
+          cd scripts && ./build_deps.sh && cd ../build
+          cmake .. -DXMRIG_DEPS=scripts/deps -DBUILD_STATIC=ON
           make -j$(nproc)
       - name: package artifact
         run: |
