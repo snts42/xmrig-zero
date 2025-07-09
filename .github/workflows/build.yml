@@ -1,4 +1,4 @@
-name: build xmrig-zero (windows)
+name: build xmrig-zero (multi-platform, 0% donation)
 
 on:
   schedule:
@@ -66,20 +66,144 @@ jobs:
           copy src\config.json build\Release\
           copy bin\WinRing0\WinRing0x64.sys build\Release\
           cd build/Release
-          7z a -tzip -mx windows_build.zip xmrig.exe config.json WinRing0x64.sys
-
-      - name: upload windows build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows_build
-          path: build/Release/windows_build.zip
+          7z a -tzip -mx xmrig-${{ needs.check.outputs.tag }}-windows-x64.zip xmrig.exe config.json WinRing0x64.sys
 
       - name: create github release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.check.outputs.tag }}
           name: ${{ needs.check.outputs.tag }}
-          body: "Automated Windows build of XMRig (${{ needs.check.outputs.tag }}) with 0% donation."
-          files: build/Release/windows_build.zip
+          files: build/Release/xmrig-${{ needs.check.outputs.tag }}-windows-x64.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build_linux_static:
+    needs: check
+    if: needs.check.outputs.already_built == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - name: install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake automake libtool autoconf libssl-dev libhwloc-dev git zlib1g-dev
+
+      - name: checkout xmrig at tag
+        uses: actions/checkout@v4
+        with:
+          repository: xmrig/xmrig
+          ref: ${{ needs.check.outputs.tag }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: checkout deps
+        run: git clone https://github.com/xmrig/xmrig-deps.git
+
+      - name: patch 0% donation
+        run: |
+          sed -i 's/constexpr const int kDefaultDonateLevel = [0-9]\+;/constexpr const int kDefaultDonateLevel = 0;/' src/donate.h
+          sed -i 's/constexpr const int kMinimumDonateLevel = [0-9]\+;/constexpr const int kMinimumDonateLevel = 0;/' src/donate.h
+
+      - name: build project (static)
+        run: |
+          mkdir build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DXMRIG_DEPS=../xmrig-deps/gcc/x86_64-linux-gnu -DBUILD_STATIC=ON
+          make -j$(nproc)
+
+      - name: package artifact
+        run: |
+          cd build
+          tar czf ../../xmrig-${{ needs.check.outputs.tag }}-linux-static-x64.tar.gz xmrig
+
+      - name: create github release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.check.outputs.tag }}
+          name: ${{ needs.check.outputs.tag }}
+          files: xmrig-${{ needs.check.outputs.tag }}-linux-static-x64.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build_macos_x64:
+    needs: check
+    if: needs.check.outputs.already_built == 'false'
+    runs-on: macos-13
+    steps:
+      - name: install deps
+        run: brew install cmake hwloc openssl
+
+      - name: checkout xmrig at tag
+        uses: actions/checkout@v4
+        with:
+          repository: xmrig/xmrig
+          ref: ${{ needs.check.outputs.tag }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: checkout deps
+        run: git clone https://github.com/xmrig/xmrig-deps.git
+
+      - name: patch 0% donation
+        run: |
+          sed -i '' 's/constexpr const int kDefaultDonateLevel = [0-9]\+;/constexpr const int kDefaultDonateLevel = 0;/' src/donate.h
+          sed -i '' 's/constexpr const int kMinimumDonateLevel = [0-9]\+;/constexpr const int kMinimumDonateLevel = 0;/' src/donate.h
+
+      - name: build project (macos x64)
+        run: |
+          mkdir build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DXMRIG_DEPS=../xmrig-deps/macos/x86_64
+          make -j$(sysctl -n hw.ncpu)
+
+      - name: package artifact
+        run: |
+          cd build
+          tar czf ../../xmrig-${{ needs.check.outputs.tag }}-macos-x64.tar.gz xmrig
+
+      - name: create github release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.check.outputs.tag }}
+          name: ${{ needs.check.outputs.tag }}
+          files: xmrig-${{ needs.check.outputs.tag }}-macos-x64.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build_macos_arm64:
+    needs: check
+    if: needs.check.outputs.already_built == 'false'
+    runs-on: macos-14  
+    steps:
+      - name: install deps
+        run: brew install cmake hwloc openssl
+
+      - name: checkout xmrig at tag
+        uses: actions/checkout@v4
+        with:
+          repository: xmrig/xmrig
+          ref: ${{ needs.check.outputs.tag }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: checkout deps
+        run: git clone https://github.com/xmrig/xmrig-deps.git
+
+      - name: patch 0% donation
+        run: |
+          sed -i '' 's/constexpr const int kDefaultDonateLevel = [0-9]\+;/constexpr const int kDefaultDonateLevel = 0;/' src/donate.h
+          sed -i '' 's/constexpr const int kMinimumDonateLevel = [0-9]\+;/constexpr const int kMinimumDonateLevel = 0;/' src/donate.h
+
+      - name: build project (macos arm64)
+        run: |
+          mkdir build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DXMRIG_DEPS=../xmrig-deps/macos/arm64
+          make -j$(sysctl -n hw.ncpu)
+
+      - name: package artifact
+        run: |
+          cd build
+          tar czf ../../xmrig-${{ needs.check.outputs.tag }}-macos-arm64.tar.gz xmrig
+
+      - name: create github release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.check.outputs.tag }}
+          name: ${{ needs.check.outputs.tag }}
+          files: xmrig-${{ needs.check.outputs.tag }}-macos-arm64.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
