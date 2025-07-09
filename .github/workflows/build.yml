@@ -87,7 +87,7 @@ jobs:
     steps:
       - name: install deps
         run: |
-          apk add --no-cache build-base cmake hwloc-dev openssl-dev libuv-dev git
+          apk add --no-cache build-base cmake hwloc-dev openssl-dev libuv-dev git pkgconf
       - name: checkout xmrig at tag
         run: |
           git clone --branch ${{ needs.check.outputs.tag }} --depth 1 https://github.com/xmrig/xmrig.git .
@@ -98,7 +98,7 @@ jobs:
       - name: build static
         run: |
           mkdir build && cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_STATIC=ON
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_STATIC=ON -DOPENSSL_ROOT_DIR=/usr
           make -j$(nproc)
       - name: package artifact
         run: |
@@ -110,41 +110,6 @@ jobs:
           tag_name: ${{ needs.check.outputs.tag }}
           name: ${{ needs.check.outputs.tag }}
           files: build/xmrig-${{ needs.check.outputs.tag }}-linux-static-x64.tar.gz
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  build_linux_focal:
-    needs: check
-    if: needs.check.outputs.already_built == 'false'
-    runs-on: ubuntu-20.04
-    continue-on-error: true
-    steps:
-      - name: install dependencies
-        run: sudo apt-get update && sudo apt-get install -y build-essential cmake libuv1-dev libssl-dev libhwloc-dev git
-      - name: checkout xmrig at tag
-        uses: actions/checkout@v4
-        with:
-          repository: xmrig/xmrig
-          ref: ${{ needs.check.outputs.tag }}
-      - name: patch 0% donation
-        run: |
-          sed -i 's/constexpr const int kDefaultDonateLevel = [0-9]\+;/constexpr const int kDefaultDonateLevel = 0;/' src/donate.h
-          sed -i 's/constexpr const int kMinimumDonateLevel = [0-9]\+;/constexpr const int kMinimumDonateLevel = 0;/' src/donate.h
-      - name: build project (focal)
-        run: |
-          mkdir build && cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release
-          make -j$(nproc)
-      - name: package artifact
-        run: |
-          cd build
-          tar czf xmrig-${{ needs.check.outputs.tag }}-focal-x64.tar.gz xmrig
-      - name: upload artifact to release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.check.outputs.tag }}
-          name: ${{ needs.check.outputs.tag }}
-          files: build/xmrig-${{ needs.check.outputs.tag }}-focal-x64.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
