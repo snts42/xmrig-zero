@@ -14,12 +14,23 @@ jobs:
     outputs:
       tag: ${{ steps.get_tag.outputs.tag }}
       already_built: ${{ steps.check_release.outputs.already_built }}
+      upstream_body: ${{ steps.get_tag.outputs.upstream_body }}
     steps:
-      - name: get latest xmrig release tag
+      - name: get latest xmrig release tag and changelog
         id: get_tag
         run: |
-          tag=$(curl -s https://api.github.com/repos/xmrig/xmrig/releases/latest | jq -r .tag_name)
+          release=$(curl -s https://api.github.com/repos/xmrig/xmrig/releases/latest)
+          tag=$(echo "$release" | jq -r .tag_name)
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "ERROR: unexpected tag format: $tag"
+            exit 1
+          fi
           echo "tag=$tag" >> $GITHUB_OUTPUT
+          # Extract upstream changelog body and store it (escape for multiline output)
+          upstream_body=$(echo "$release" | jq -r .body)
+          echo "upstream_body<<EOF" >> $GITHUB_OUTPUT
+          echo "$upstream_body" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: check if release already exists
         id: check_release
@@ -36,11 +47,42 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: create release with description
+        if: steps.check_release.outputs.already_built == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.get_tag.outputs.tag }}
+          name: ${{ steps.get_tag.outputs.tag }}
+          body: |
+            ## XMRig ${{ steps.get_tag.outputs.tag }} — 0% donation patch
+
+            Built from [xmrig/xmrig@${{ steps.get_tag.outputs.tag }}](https://github.com/xmrig/xmrig/tree/${{ steps.get_tag.outputs.tag }}) with the following patch applied to `src/donate.h`:
+
+            ```
+            kDefaultDonateLevel = 0
+            kMinimumDonateLevel = 0
+            ```
+
+            `src/config.json` is also patched: `donate-level` and `donate-over-proxy` set to `0`.
+
+            Source code: https://github.com/xmrig/xmrig/tree/${{ steps.get_tag.outputs.tag }}
+            License: GPL-3.0 — Copyright (C) 2016-2025 xmrig.com
+
+            **Please consider donating to the XMRig developers if you use this build:**
+            XMR: `48edfHu7V9Z84YzzMa6fUueoELZ9ZRXq9VetWzYGzKt52XU5xvqgzYnDK9URnRoJMk1j8nLwEVsaSWJ4fhdUyZijBGUicoD`
+
+            ---
+
+            ## Upstream release notes
+
+            ${{ steps.get_tag.outputs.upstream_body }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   build_win:
     needs: check
     if: needs.check.outputs.already_built == 'false'
     runs-on: windows-latest
-    continue-on-error: true
     steps:
       - name: checkout xmrig at tag
         uses: actions/checkout@v4
@@ -54,8 +96,10 @@ jobs:
 
       - name: patch 0% donation
         run: |
-          powershell -Command "(Get-Content src/donate.h) -replace 'kDefaultDonateLevel = [0-9]+','kDefaultDonateLevel = 0' | Set-Content src/donate.h"
-          powershell -Command "(Get-Content src/donate.h) -replace 'kMinimumDonateLevel = [0-9]+','kMinimumDonateLevel = 0' | Set-Content src/donate.h"
+          (Get-Content src/donate.h) -replace 'kDefaultDonateLevel = [0-9]+','kDefaultDonateLevel = 0' | Set-Content src/donate.h
+          (Get-Content src/donate.h) -replace 'kMinimumDonateLevel = [0-9]+','kMinimumDonateLevel = 0' | Set-Content src/donate.h
+          (Get-Content src/config.json) -replace '"donate-level": [0-9]+','"donate-level": 0' | Set-Content src/config.json
+          (Get-Content src/config.json) -replace '"donate-over-proxy": [0-9]+','"donate-over-proxy": 0' | Set-Content src/config.json
 
       - name: build project on windows
         run: |
@@ -66,10 +110,20 @@ jobs:
         run: |
           copy src\config.json build\Release\
           copy bin\WinRing0\WinRing0x64.sys build\Release\
+          copy scripts\pool_mine_example.cmd build\Release\
+          copy scripts\benchmark_1M.cmd build\Release\
+          copy scripts\benchmark_10M.cmd build\Release\
           cd build/Release
-          7z a -tzip -mx xmrig-${{ needs.check.outputs.tag }}-windows-x64.zip xmrig.exe config.json WinRing0x64.sys
+          7z a -tzip -mx xmrig-${{ needs.check.outputs.tag }}-windows-x64.zip xmrig.exe config.json WinRing0x64.sys pool_mine_example.cmd benchmark_1M.cmd benchmark_10M.cmd
 
-      - name: upload artifact to release
+      - name: upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xmrig-${{ needs.check.outputs.tag }}-windows-x64
+          path: build/Release/xmrig-${{ needs.check.outputs.tag }}-windows-x64.zip
+          retention-days: 1
+
+      - name: upload to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.check.outputs.tag }}
@@ -83,7 +137,6 @@ jobs:
     if: needs.check.outputs.already_built == 'false'
     runs-on: ubuntu-latest
     container: alpine:latest
-    continue-on-error: true
     steps:
       - name: install deps
         run: |
@@ -93,8 +146,10 @@ jobs:
           git clone --branch ${{ needs.check.outputs.tag }} --depth 1 https://github.com/xmrig/xmrig.git .
       - name: patch 0% donation
         run: |
-          sed -i 's/constexpr const int kDefaultDonateLevel = [0-9]\+;/constexpr const int kDefaultDonateLevel = 0;/' src/donate.h
-          sed -i 's/constexpr const int kMinimumDonateLevel = [0-9]\+;/constexpr const int kMinimumDonateLevel = 0;/' src/donate.h
+          sed -i 's/kDefaultDonateLevel = [0-9]\+/kDefaultDonateLevel = 0/g' src/donate.h
+          sed -i 's/kMinimumDonateLevel = [0-9]\+/kMinimumDonateLevel = 0/g' src/donate.h
+          sed -i 's/"donate-level": [0-9]\+/"donate-level": 0/g' src/config.json
+          sed -i 's/"donate-over-proxy": [0-9]\+/"donate-over-proxy": 0/g' src/config.json
       - name: build static
         run: |
           cd scripts
@@ -105,9 +160,16 @@ jobs:
           make -j$(nproc)
       - name: package artifact
         run: |
+          cp src/config.json build/
           cd build
-          tar czf xmrig-${{ needs.check.outputs.tag }}-linux-static-x64.tar.gz xmrig
-      - name: upload artifact to release
+          tar czf xmrig-${{ needs.check.outputs.tag }}-linux-static-x64.tar.gz xmrig config.json
+      - name: upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xmrig-${{ needs.check.outputs.tag }}-linux-static-x64
+          path: build/xmrig-${{ needs.check.outputs.tag }}-linux-static-x64.tar.gz
+          retention-days: 1
+      - name: upload to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.check.outputs.tag }}
@@ -120,7 +182,6 @@ jobs:
     needs: check
     if: needs.check.outputs.already_built == 'false'
     runs-on: ubuntu-22.04
-    continue-on-error: true
     steps:
       - name: install dependencies
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake libuv1-dev libssl-dev libhwloc-dev git
@@ -131,8 +192,10 @@ jobs:
           ref: ${{ needs.check.outputs.tag }}
       - name: patch 0% donation
         run: |
-          sed -i 's/constexpr const int kDefaultDonateLevel = [0-9]\+;/constexpr const int kDefaultDonateLevel = 0;/' src/donate.h
-          sed -i 's/constexpr const int kMinimumDonateLevel = [0-9]\+;/constexpr const int kMinimumDonateLevel = 0;/' src/donate.h
+          sed -i 's/kDefaultDonateLevel = [0-9]\+/kDefaultDonateLevel = 0/g' src/donate.h
+          sed -i 's/kMinimumDonateLevel = [0-9]\+/kMinimumDonateLevel = 0/g' src/donate.h
+          sed -i 's/"donate-level": [0-9]\+/"donate-level": 0/g' src/config.json
+          sed -i 's/"donate-over-proxy": [0-9]\+/"donate-over-proxy": 0/g' src/config.json
       - name: build project (jammy)
         run: |
           mkdir build && cd build
@@ -140,9 +203,16 @@ jobs:
           make -j$(nproc)
       - name: package artifact
         run: |
+          cp src/config.json build/
           cd build
-          tar czf xmrig-${{ needs.check.outputs.tag }}-jammy-x64.tar.gz xmrig
-      - name: upload artifact to release
+          tar czf xmrig-${{ needs.check.outputs.tag }}-jammy-x64.tar.gz xmrig config.json
+      - name: upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xmrig-${{ needs.check.outputs.tag }}-jammy-x64
+          path: build/xmrig-${{ needs.check.outputs.tag }}-jammy-x64.tar.gz
+          retention-days: 1
+      - name: upload to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.check.outputs.tag }}
@@ -155,7 +225,6 @@ jobs:
     needs: check
     if: needs.check.outputs.already_built == 'false'
     runs-on: ubuntu-24.04
-    continue-on-error: true
     steps:
       - name: install dependencies
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake libuv1-dev libssl-dev libhwloc-dev git
@@ -166,8 +235,10 @@ jobs:
           ref: ${{ needs.check.outputs.tag }}
       - name: patch 0% donation
         run: |
-          sed -i 's/constexpr const int kDefaultDonateLevel = [0-9]\+;/constexpr const int kDefaultDonateLevel = 0;/' src/donate.h
-          sed -i 's/constexpr const int kMinimumDonateLevel = [0-9]\+;/constexpr const int kMinimumDonateLevel = 0;/' src/donate.h
+          sed -i 's/kDefaultDonateLevel = [0-9]\+/kDefaultDonateLevel = 0/g' src/donate.h
+          sed -i 's/kMinimumDonateLevel = [0-9]\+/kMinimumDonateLevel = 0/g' src/donate.h
+          sed -i 's/"donate-level": [0-9]\+/"donate-level": 0/g' src/config.json
+          sed -i 's/"donate-over-proxy": [0-9]\+/"donate-over-proxy": 0/g' src/config.json
       - name: build project (noble)
         run: |
           mkdir build && cd build
@@ -175,9 +246,16 @@ jobs:
           make -j$(nproc)
       - name: package artifact
         run: |
+          cp src/config.json build/
           cd build
-          tar czf xmrig-${{ needs.check.outputs.tag }}-noble-x64.tar.gz xmrig
-      - name: upload artifact to release
+          tar czf xmrig-${{ needs.check.outputs.tag }}-noble-x64.tar.gz xmrig config.json
+      - name: upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xmrig-${{ needs.check.outputs.tag }}-noble-x64
+          path: build/xmrig-${{ needs.check.outputs.tag }}-noble-x64.tar.gz
+          retention-days: 1
+      - name: upload to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.check.outputs.tag }}
@@ -190,7 +268,6 @@ jobs:
     needs: check
     if: needs.check.outputs.already_built == 'false'
     runs-on: macos-13
-    continue-on-error: true
     steps:
       - name: install dependencies
         run: brew install cmake hwloc openssl
@@ -201,8 +278,10 @@ jobs:
           ref: ${{ needs.check.outputs.tag }}
       - name: patch 0% donation
         run: |
-          sed -i '' 's/constexpr const int kDefaultDonateLevel = [0-9]\+;/constexpr const int kDefaultDonateLevel = 0;/' src/donate.h
-          sed -i '' 's/constexpr const int kMinimumDonateLevel = [0-9]\+;/constexpr const int kMinimumDonateLevel = 0;/' src/donate.h
+          sed -i '' 's/kDefaultDonateLevel = [0-9]*/kDefaultDonateLevel = 0/g' src/donate.h
+          sed -i '' 's/kMinimumDonateLevel = [0-9]*/kMinimumDonateLevel = 0/g' src/donate.h
+          sed -i '' 's/"donate-level": [0-9]*/"donate-level": 0/g' src/config.json
+          sed -i '' 's/"donate-over-proxy": [0-9]*/"donate-over-proxy": 0/g' src/config.json
       - name: build project (macos-x64)
         run: |
           mkdir build && cd build
@@ -210,9 +289,16 @@ jobs:
           make -j$(sysctl -n hw.logicalcpu)
       - name: package artifact
         run: |
+          cp src/config.json build/
           cd build
-          tar czf xmrig-${{ needs.check.outputs.tag }}-macos-x64.tar.gz xmrig
-      - name: upload artifact to release
+          tar czf xmrig-${{ needs.check.outputs.tag }}-macos-x64.tar.gz xmrig config.json
+      - name: upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xmrig-${{ needs.check.outputs.tag }}-macos-x64
+          path: build/xmrig-${{ needs.check.outputs.tag }}-macos-x64.tar.gz
+          retention-days: 1
+      - name: upload to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.check.outputs.tag }}
@@ -225,7 +311,6 @@ jobs:
     needs: check
     if: needs.check.outputs.already_built == 'false'
     runs-on: macos-14
-    continue-on-error: true
     steps:
       - name: install dependencies
         run: brew install cmake hwloc openssl
@@ -236,8 +321,10 @@ jobs:
           ref: ${{ needs.check.outputs.tag }}
       - name: patch 0% donation
         run: |
-          sed -i '' 's/constexpr const int kDefaultDonateLevel = [0-9]\+;/constexpr const int kDefaultDonateLevel = 0;/' src/donate.h
-          sed -i '' 's/constexpr const int kMinimumDonateLevel = [0-9]\+;/constexpr const int kMinimumDonateLevel = 0;/' src/donate.h
+          sed -i '' 's/kDefaultDonateLevel = [0-9]*/kDefaultDonateLevel = 0/g' src/donate.h
+          sed -i '' 's/kMinimumDonateLevel = [0-9]*/kMinimumDonateLevel = 0/g' src/donate.h
+          sed -i '' 's/"donate-level": [0-9]*/"donate-level": 0/g' src/config.json
+          sed -i '' 's/"donate-over-proxy": [0-9]*/"donate-over-proxy": 0/g' src/config.json
       - name: build project (macos-arm64)
         run: |
           mkdir build && cd build
@@ -245,13 +332,53 @@ jobs:
           make -j$(sysctl -n hw.logicalcpu)
       - name: package artifact
         run: |
+          cp src/config.json build/
           cd build
-          tar czf xmrig-${{ needs.check.outputs.tag }}-macos-arm64.tar.gz xmrig
-      - name: upload artifact to release
+          tar czf xmrig-${{ needs.check.outputs.tag }}-macos-arm64.tar.gz xmrig config.json
+      - name: upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xmrig-${{ needs.check.outputs.tag }}-macos-arm64
+          path: build/xmrig-${{ needs.check.outputs.tag }}-macos-arm64.tar.gz
+          retention-days: 1
+      - name: upload to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.check.outputs.tag }}
           name: ${{ needs.check.outputs.tag }}
           files: build/xmrig-${{ needs.check.outputs.tag }}-macos-arm64.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  sha256sums:
+    needs:
+      - check
+      - build_win
+      - build_linux_static
+      - build_linux_jammy
+      - build_linux_noble
+      - build_macos_x64
+      - build_macos_arm64
+    if: always() && needs.check.outputs.already_built == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - name: download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: generate SHA256SUMS
+        run: |
+          cd artifacts
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: upload SHA256SUMS to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.check.outputs.tag }}
+          name: ${{ needs.check.outputs.tag }}
+          files: artifacts/SHA256SUMS
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

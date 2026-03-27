@@ -1,0 +1,32 @@
+name: keepalive
+
+on:
+  schedule:
+    - cron: '0 12 1 * *'   # 1st of every month at 12:00 UTC
+  workflow_dispatch:
+
+permissions:
+  actions: write
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: keep scheduled workflows alive
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const workflows = await github.rest.actions.listRepoWorkflows({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+            });
+            for (const workflow of workflows.data.workflows) {
+              if (workflow.state === 'disabled_inactivity') {
+                await github.rest.actions.enableWorkflow({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  workflow_id: workflow.id,
+                });
+                console.log(`Re-enabled: ${workflow.name}`);
+              }
+            }
